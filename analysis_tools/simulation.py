@@ -7,11 +7,11 @@ from .geometry import GeometryProcessor
 
 class Simulation:
     """
-    Unified simulation container:
-      - loads VTP frames
-      - builds material ID maps
-      - provides field_lagrangian(), area_lagrangian()
-      - high-level analysis helpers
+    Fully vectorised Simulation container.
+    Adds:
+        - lagrangian_indices: (n_times, n_points)
+        - fast field_lagrangian (no nested loops)
+        - fast area_lagrangian
     """
 
     def __init__(self, pattern):
@@ -20,33 +20,64 @@ class Simulation:
             raise FileNotFoundError(f"No VTP files match pattern: {pattern}")
 
         self.frames = [pv.read(f) for f in self.files]
+
+        # Time array
         self.times = np.array([
             f.field_data.get("TimeValue", [None])[0]
             for f in self.frames
         ])
 
-        self._triangulation = None
-
+        # Build ID maps
         self.id_maps = []
         self._build_id_maps()
+
+        # Lagrangian ordering (material point IDs)
         self.material_ids = self.frames[0].point_data["id"].astype(int)
 
+        # Build Lagrangian index matrix (FAST access)
+        self.lagrangian_indices = self._build_lagrangian_indices()
+
+        # Cached triangulation
+        self._triangulation = None
+
+        # Derived fields
         self._prepare_derived_fields()
 
+    # --------------------------------------------------------------
     def _prepare_derived_fields(self):
-        for f in self.frames:
-            if "vel" in f.point_data:
-                v = f.point_data["vel"]
-                f.point_data["vel_mag"] = np.linalg.norm(v, axis=1)
+        for frame in self.frames:
+            if "vel" in frame.point_data:
+                v = frame.point_data["vel"]
+                frame.point_data["vel_mag"] = np.linalg.norm(v, axis=1)
 
+    # --------------------------------------------------------------
+    # ID maps: per frame dict(mid -> vertex_index)
+    # --------------------------------------------------------------
     def _build_id_maps(self):
         for f in self.frames:
             ids = f.point_data["id"].astype(int)
             self.id_maps.append({mid: i for i, mid in enumerate(ids)})
 
-    # ------------------------------------------------------------
-    # Access methods
-    # ------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Build Lagrangian index matrix (FAST)
+    # --------------------------------------------------------------
+    def _build_lagrangian_indices(self):
+        ids0 = self.material_ids
+        n_times = len(self.frames)
+        n_points = len(ids0)
+
+        idx_mat = np.zeros((n_times, n_points), dtype=int)
+
+        for t in range(n_times):
+            mapping = self.id_maps[t]
+            # vectorised mapping using list comprehension only once
+            idx_mat[t] = [mapping[mid] for mid in ids0]
+
+        return idx_mat
+
+    # --------------------------------------------------------------
+    # Eulerian access (unchanged)
+    # --------------------------------------------------------------
     def field(self, name):
         out = []
         for f in self.frames:
@@ -58,35 +89,46 @@ class Simulation:
                 raise KeyError(f"Field '{name}' not found.")
         return out
 
+    # --------------------------------------------------------------
+    # FAST Lagrangian field extraction
+    # --------------------------------------------------------------
     def field_lagrangian(self, field):
-        ids0 = self.material_ids
-        raw = []
-        for mid in ids0:
-            vals = []
-            for k, frame in enumerate(self.frames):
-                idx = self.id_maps[k][mid]
-                vals.append(frame.point_data[field][idx])
-            raw.append(vals)
-        return np.array(raw)  # (n_points, n_times)
+        """
+        Return array (n_points, n_times)
+        Uses lagrangian_indices for fast traversal.
+        """
 
+        n_times, n_points = self.lagrangian_indices.shape
+        out = np.zeros((n_points, n_times))
+
+        for t, frame in enumerate(self.frames):
+            vals = frame.point_data[field]
+            out[:, t] = vals[self.lagrangian_indices[t]]
+
+        return out
+
+    # --------------------------------------------------------------
+    # FAST Lagrangian area extraction
+    # --------------------------------------------------------------
     def area_lagrangian(self, area_field="bary_area"):
-        ids0 = self.material_ids
-        allA = []
-        for k, frame in enumerate(self.frames):
-            A = frame.point_data[area_field]
-            map_k = self.id_maps[k]
-            aligned = [A[map_k[mid]] for mid in ids0]
-            allA.append(aligned)
-        return np.array(allA)  # (n_times, n_points)
+        n_times, n_points = self.lagrangian_indices.shape
+        out = np.zeros((n_times, n_points))
 
+        for t, frame in enumerate(self.frames):
+            A = frame.point_data[area_field]
+            out[t] = A[self.lagrangian_indices[t]]
+
+        return out
+
+    # --------------------------------------------------------------
     def triangulation(self):
         if self._triangulation is None:
             self._triangulation = GeometryProcessor.triangulation(self.frames[0])
         return self._triangulation
 
-    # ------------------------------------------------------------
-    # Extraction helpers requested by user
-    # ------------------------------------------------------------
+    # --------------------------------------------------------------
+    # Analysis helpers (unchanged)
+    # --------------------------------------------------------------
     def field_at_time(self, field, time_index):
         return GeometryProcessor.spatial_series(self, field, time_index)
 
@@ -115,24 +157,19 @@ class Simulation:
         means = self.spatial_mean_over_time(field, area_field)
         φ = self.field_lagrangian(field)
         A = self.area_lagrangian(area_field)
-        vars = []
-        for t in range(φ.shape[1]):
-            μ = means[t]
-            vars.append(np.sum(((φ[:, t] - μ)**2) * A[t]) / np.sum(A[t]))
-        return np.sqrt(np.array(vars))
+        vars = np.sum(((φ - means) ** 2) * A.T, axis=0) / np.sum(A, axis=1)
+        return np.sqrt(vars)
 
-    # ------------------------------------------------------------
-    # Links to other modules
-    # ------------------------------------------------------------
-    def spectrum(self, field, area_field="bary_area", weighting="mean-area"):
+    # --------------------------------------------------------------
+    # External module wrappers unchanged
+    # --------------------------------------------------------------
+    def spectrum(self, *args, **kwargs):
         from .spectral import SpectralTools
-        return SpectralTools.temporal_spectrum(self, field, area_field, weighting)
+        return SpectralTools.temporal_spectrum(self, *args, **kwargs)
 
-    def animate(self, field, mode="static", outfile=None):
+    def animate(self, *args, **kwargs):
         from .animator import MatplotlibAnimator
-        anim = MatplotlibAnimator(self, field, mode)
-        if outfile:
-            anim.save(outfile)
+        anim = MatplotlibAnimator(self, *args, **kwargs)
         return anim
 
     def diagnostics(self):
