@@ -1,0 +1,15 @@
+[project]
+name = "analysis_tools"
+version = "0.1.0"
+description = "Unified analysis framework for Active Shell VTP simulations"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pyvista",
+    "matplotlib",
+    "scipy"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

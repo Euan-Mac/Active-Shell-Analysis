@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: analysis_tools
+Version: 0.1.0
+Summary: Unified analysis framework for Active Shell VTP simulations
+Requires-Python: >=3.10
+Requires-Dist: numpy
+Requires-Dist: pyvista
+Requires-Dist: matplotlib
+Requires-Dist: scipy
