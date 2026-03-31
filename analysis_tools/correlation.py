@@ -1,23 +1,18 @@
 import numpy as np
+from .geometry import GeometryProcessor
 
 
 class CorrelationTools:
     """
-    Spatial correlation functions.
-    Initial implementation: Euclidean correlation.
-    Later: geodesic, spherical harmonics, etc.
+    Placeholder for real geodesic correlations.
     """
 
     @staticmethod
-    def spatial(sim, field):
-        vals = sim.field(field)
-        final = vals[-1]      # last frame
-        pts = sim.frames[-1].points
-
-        x = final - final.mean()
-        corr = np.dot(x, x) / len(x)
-
+    def spatial(sim, field, time_index=-1):
+        φ = GeometryProcessor.spatial_series(sim, field, time_index)
+        φ -= φ.mean()
+        var = np.mean(φ**2)
         return {
-            "simple_variance": float(corr),
-            "note": "This is a placeholder; implement geodesic correlations later."
+            "variance": float(var),
+            "note": "Geodesic correlation not implemented."
         }

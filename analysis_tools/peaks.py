@@ -1,11 +1,11 @@
 import numpy as np
 from scipy.ndimage import label
+from .geometry import GeometryProcessor
 
 
 class PeakTracker:
     """
-    Threshold + peak tracking.
-    Placeholder for now; just thresholds last frame.
+    Simple per-time-step peak finder.
     """
 
     def __init__(self, sim, field, threshold=None):
@@ -13,18 +13,13 @@ class PeakTracker:
         self.field = field
         self.threshold = threshold
 
-    def run(self):
-        data = self.sim.field(self.field)[-1]  # last frame
+    def run(self, time_index=-1):
+        φ = GeometryProcessor.spatial_series(self.sim, self.field, time_index)
         if self.threshold is None:
-            self.threshold = np.mean(data) + 2*np.std(data)
-
-        mask = data > self.threshold
-
-        # Dummy peak count
-        labels, n = label(mask.astype(int))
-
+            self.threshold = np.mean(φ) + 2*np.std(φ)
+        mask = φ > self.threshold
+        labeled, n = label(mask.astype(int))
         return {
-            "num_peaks": n,
-            "threshold": float(self.threshold),
-            "note": "Full peak tracking will be implemented later."
+            "num_peaks": int(n),
+            "threshold": float(self.threshold)
         }
